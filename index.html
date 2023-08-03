@@ -1,0 +1,639 @@
+<html>
+	<head>
+        <meta charset=utf-8>
+		<title>Newtons cradle</title>
+		<style>
+			body { margin: 0; }
+			canvas { width: 100%; height: 100% }
+		</style>
+	</head>
+	<body>
+		<script src="js/three.js"></script>
+        <script src="js/dat.gui.min.js"></script>
+        <script src="js/GLTFLoader.js"></script>
+        <script src="js/OrbitControls.js"></script>
+		<script>
+            /*********** Creating basic scene with controls ***********/
+            
+            //Camera and scene
+			var scene = new THREE.Scene();
+			var camera = new THREE.PerspectiveCamera( 75, window.innerWidth/window.innerHeight, 0.1, 1000 );
+            camera.position.z = 5;
+            
+            //Lights
+            //var light = new THREE.AmbientLight(0xffffff, 0.5);
+            //scene.add(light);
+            var light2 = new THREE.PointLight(0xffffff, 0.75);
+            light2.position.z = 10;
+            scene.add(light2);
+            
+            //Renderer
+			var renderer = new THREE.WebGLRenderer({antialias: true});
+			renderer.setSize( window.innerWidth, window.innerHeight );
+			document.body.appendChild( renderer.domElement );
+            
+            //When resizing window
+            window.addEventListener('resize',function() {
+                //Resize viewport
+                var width = window.innerWidth;
+                var height = window.innerHeight;
+                renderer.setSize(width, height);
+                
+                //Do not morph image
+                camera.aspect = width/height;
+                camera.updateProjectionMatrix();
+            });
+            
+            //Create controls for navigation
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            
+            //Move camera and target to center of cradle
+            camera.position.set(9,0,15);
+            controls.target.set(9,0,0);
+            controls.update();
+
+            /*************************************/
+           
+            
+            /*************        Start pendulums         **************/
+            
+            //Reset values
+            const START_RADIUS = [1,1,1,1,1,1,1,1,1,1];
+            const START_MASS = [1,1,1,1,1,1,1,1,1,1];
+            const START_ANGLE = [-Math.PI/2,0,0,0,0,0,0,0,0,0];
+            
+            //Initial values
+            var selected;
+            var selectedIndex = 0;
+            var startOfPen = [true, true, true, true, true, true, true, true, true, true];
+            //Create material for pendulums
+            //(texture only works locally in firefox, works fine on server)
+            var reflection = new THREE.CubeTextureLoader().load( [ 
+                'img/skybox/px.jpg', 
+                'img/skybox/nx.jpg', 
+                'img/skybox/py.jpg', 
+                'img/skybox/ny.jpg', 
+                'img/skybox/pz.jpg', 
+                'img/skybox/nz.jpg' 
+            ] );
+            var material = new THREE.MeshStandardMaterial({
+                roughness: 0,
+                metalness: 1,
+                envMap: reflection,
+                envMapIntensity: 1
+            });
+            var numPends = 5;
+            const MAX_PENDS = 10;
+            
+            const defaultRadius = 1;
+            var radiusScale = [1,1,1,1,1,1,1,1,1,1];
+            var mass = [1,1,1,1,1,1,1,1,1,1];
+            var theta0 = [-Math.PI/2,0,0,0,0,0,0,0,0,0];
+            var theta = [];
+            const v0 = [0,0,0,0,0,0,0,0,0,0];
+            var v = [0,0,0,0,0,0,0,0,0,0];
+            var a = [0,0,0,0,0,0,0,0,0,0];
+            const L = 8;
+            const g = 9.82;
+            var CR = 1;
+            var CD = 0.5;
+            var airDensity = 1.2;
+            const h = 1/60; // (1/fps)
+            const STRING_END_X = 4.4;
+            const STRING_END_Y = 8.4;
+            
+            //Cords for pendulums
+            var lineMaterial = new THREE.LineBasicMaterial( { color: 0x414141 } );
+            const STRING1 = new THREE.Vector3(0, STRING_END_Y, -STRING_END_X);
+            const STRING2 = new THREE.Vector3(0, STRING_END_Y, STRING_END_X);
+            var lineGeometry = [];
+            var line = [];
+            var spheres = [];
+            
+            //Positions
+            var x_pos = 0;
+            var x_coord = [];
+            var y_coord = [];
+            
+            //For animation
+            //Start/pause/reset animation 
+            //solution from: https://stackoverflow.com/questions/38034787/three-js-and-buttons-for-start-and-pause-animation
+            var initAnim = true;
+            var runAnim = false;
+            var isPlay = false;            
+            
+            //For dat.gui menu
+            var options = {
+                restitution: CR,
+                drag: CD,
+                airDensity: airDensity,
+                numberPend: numPends,
+                radius: radiusScale[selectedIndex],
+                mass: mass[selectedIndex],
+                angle: theta0[selectedIndex],
+                
+                startOrPause: function() {
+                    if (initAnim) {
+                        initAnim = false;
+                        runAnim = true;
+                    }
+                    if (runAnim) {
+                        runAnim = false;
+                        isPlay = true;
+                        animate();
+                    } else {
+                        runAnim = true;
+                        isPlay = false;
+                    }
+                },
+                resetAnim: function() {
+                    initAnim = true;
+                    runAnim = false;
+                    isPlay = false;
+                    
+                    //Reset physics values
+                    a = [0,0,0,0,0,0,0,0,0,0];
+                    v = [0,0,0,0,0,0,0,0,0,0];
+                    theta = [0,0,0,0,0,0,0,0,0,0];
+            
+                    //Set to initial pendulums
+                    startOfPen = [];
+                
+                    //Position the pendulums
+                    x_pos = 0;
+                    for (var i = 0; i < MAX_PENDS; i++) 
+                    {   
+                        startOfPen.push(true);
+                        
+                        x_coord[i] = (L*Math.sin(theta0[i]));
+                        y_coord[i] = (-L*Math.cos(theta0[i])+STRING_END_Y);
+                        
+                        spheres[i].position.x = x_coord[i] + x_pos;
+                        spheres[i].position.y = y_coord[i];
+                    
+                        line[i].geometry.vertices[1].set(x_coord[i]-radiusScale[i]*Math.sin(theta0[i]),y_coord[i]+radiusScale[i]*Math.cos(theta0[i]),0);
+                        line[i].geometry.verticesNeedUpdate = true;
+                        line[i].position.x = x_pos;
+                    
+                        x_pos += (radiusScale[i]+radiusScale[i+1]);
+                    }
+                },
+                //Resets values of the selected pendulum and updates the sliders
+                resetCurrent: function() {
+                    //Resets every pendulum, reset not working if not done one by one
+                    radiusScale[selectedIndex] = START_RADIUS[selectedIndex];
+                    mass[selectedIndex] = START_MASS[selectedIndex];
+                    theta0[selectedIndex] = START_ANGLE[selectedIndex];
+                    spheres[selectedIndex].scale.set(1,1,1);    
+                    
+                    radiusScale[selectedIndex] = START_RADIUS[selectedIndex];
+                    pendulums.__controllers[1].setValue(radiusScale[selectedIndex]);
+                    
+                    mass[selectedIndex] = START_MASS[selectedIndex];
+                    pendulums.__controllers[2].setValue(mass[selectedIndex]);
+                    
+                    theta0[selectedIndex] = START_ANGLE[selectedIndex]; 
+                    pendulums.__controllers[3].setValue(theta0[selectedIndex]);
+                },
+                resetAll: function() {
+                    
+                    
+                    //Resets every pendulum, reset not working if not done one by one
+                    for(var i = 0; i < MAX_PENDS; i++) {
+                        radiusScale[i] = START_RADIUS[i];
+                        mass[i] = START_MASS[i];
+                        theta0[i] = START_ANGLE[i];
+                        spheres[i].scale.set(1,1,1);
+                    }
+                    
+                    //Updates the sliders for pendulum options
+                    pendulums.__controllers[1].setValue(1);
+                    pendulums.__controllers[2].setValue(1);
+                    pendulums.__controllers[3].setValue(theta0[selectedIndex]);
+                    
+                    updateCradle();
+                }
+            };
+            
+            
+            /**************************** Main ***************************/
+            /*************************************************************/
+              
+            //Load cradle as 3D object with reflective material
+            //.gltf (requires protocol schemes)
+            const CRADLECOLOR = 0.75;
+            const CRADLEROUGH = 0.1;
+            const CRADLEMETAL = 1;
+            const SCALE_X_FACTOR = 0.35;
+            const CRADLE_SCALE_Y = 3;
+            const CRADLE_SCALE_Z = 6;
+            var cradleScaleX = cradleWidth/SCALE_X_FACTOR;
+            var cradleWidth;
+            var cradle;
+            
+            //Draw initial pendulums
+            for (var i = 0; i < MAX_PENDS; i++) 
+            {
+                //Spheres
+                var geometry = new THREE.SphereBufferGeometry(defaultRadius, 25, 25);
+                spheres.push(new THREE.Mesh(geometry, material));
+                
+                x_coord.push(L*Math.sin(theta0[i]));
+                y_coord.push(-L*Math.cos(theta0[i])+STRING_END_Y);
+                spheres[i].position.x = x_coord[i] + x_pos;
+                spheres[i].position.y = y_coord[i];
+                
+                //Cords
+                lineGeometry.push(new THREE.Geometry());
+                lineGeometry[i].vertices.push(STRING1);
+                lineGeometry[i].vertices.push(new THREE.Vector3(x_coord[i]-radiusScale[i]*Math.sin(theta0[i]),y_coord[i]+radiusScale[i]*Math.cos(theta0[i]),0));
+                lineGeometry[i].vertices.push(STRING2);
+                line[i] = new THREE.Line(lineGeometry[i], lineMaterial);
+                line[i].position.x = x_pos;
+                
+                x_pos += (defaultRadius*2);
+                
+                if(startOfPen[i]){ 
+                        //Calculates initial acceleration velocity and the 
+                        //angle in the next timestep
+                        a[i]=(-g*Math.sin(theta0[i])/L);
+                        v[i]=(v0[i]+h*a[i]);
+                        theta[i]=(theta0[i] + h*v0[i]);
+                        startOfPen[i] = false;
+                    }
+            }
+            
+            //Positioning
+            cradleWidth = 0;
+            //Add the selected amount of pendulums into scene
+            for (var i = 0; i < numPends; i++){
+                scene.add(spheres[i]);
+                scene.add(line[i]);
+                cradleWidth += radiusScale[i];
+            }
+            //Position and scale the cradle to the center relative to the pendulums
+            cradleScaleX = cradleWidth/SCALE_X_FACTOR;
+
+            //Position the camera and target point of controls to center relative to the pendulums
+            camera.position.set((cradleWidth-radiusScale[0]),0,18);
+            controls.target.set((cradleWidth-radiusScale[0]),0,0);
+            controls.update();            
+            
+            var height = L + Math.max.apply(null,radiusScale);
+            var loader = new THREE.GLTFLoader();
+            loader.load('img/cradle2.gltf', function (gltf) {
+                cradle = gltf.scene;
+                //Overriding the material
+                //Solution found at https://github.com/donmccurdy/aframe-extras/issues/167
+                cradle.traverse((node) => 
+                {
+                    if (!node.isMesh){
+                        return;
+                    } else {
+                        node.material.color.setRGB(CRADLECOLOR,CRADLECOLOR,CRADLECOLOR);
+                        node.material.roughness = CRADLEROUGH;
+                        node.material.metalness = CRADLEMETAL;
+                        node.material.envMap = reflection;
+                    }
+                });
+                //Add the cradle into the scene, resize and position it
+                scene.add(cradle);
+               cradle.position.set(cradleWidth-radiusScale[0],1.5,0);
+                cradle.scale.set(cradleScaleX,CRADLE_SCALE_Y*height,CRADLE_SCALE_Z*height/2);
+            }, 
+            //If cradle not loaded properly, write out in console
+            function(error) {
+                console.log(error);
+            });
+            
+            //Make selecting available
+            //First set default selection
+            selected = spheres[selectedIndex];
+            var raycaster = new THREE.Raycaster();
+            var mouse = new THREE.Vector2();
+            renderer.domElement.addEventListener("click", onClick);
+            
+            //Render the scene
+            render();
+            
+            /*********        dat.GUI menu       *********/
+            
+            //Create a menu
+            var gui = new dat.GUI();
+            //Add buttons for starting and reseting the simulation 
+            gui.add(options, 'startOrPause').name('Play/Pause simulation');
+            gui.add(options, 'resetAnim').name('Reset simulation');
+            //Create a new folder in the menu
+            var energyLoss = gui.addFolder('Energy loss options');
+            //When the controllers change by the user, update the values of the respective constants
+            energyLoss.add(options, 'restitution', 0, 1).name('Restitution').onChange(function(e)
+            {
+                CR = e;
+            });
+            energyLoss.add(options, 'drag', 0, 1).name('Drag').onChange(function(e)
+            {
+                CD = e;
+            });
+            energyLoss.add(options, 'airDensity', 1, 2).name('Air density').onChange(function(e)
+            {
+                airDensity = e;
+            });
+            //Keep the folder open when the page is loaded
+            energyLoss.open();
+            //Create new folder in the menu
+            var pendulums = gui.addFolder('Pendulum options');
+            //Add slider for number of pendulums, create them with set values
+            //When the user has finished changing the slider, update the variable to the new value
+            //and remove the old spheres and draw new spheres into the scene
+            pendulums.add(options, 'numberPend', 1, 10,1).name('Quantity').onFinishChange(function(e) {
+                numPends = e;
+                options.numberPend = numPends;
+                
+                for (var i  = 0; i < spheres.length; i++) {
+                    scene.remove(spheres[i]);
+                    scene.remove(line[i]);
+                }
+                for (var i = 0; i < e; i++){
+                    scene.add(spheres[i]);
+                    scene.add(line[i]);
+                }
+                
+                //If the selected sphere is no longer rendered into scene, change selected to one that is
+                if (selectedIndex > numPends) {
+                    selectedIndex = numPends-1; 
+                    pendulums.__controllers[1].setValue(radiusScale[selectedIndex]);
+                } 
+                
+                updateCradle();
+            });
+            //Add slider for radius, mass and starting angle, update current spheres when changed
+            pendulums.add(options, 'radius', 0.5, 3).name('Radius').onChange(function(e)
+            {                
+                radiusScale[selectedIndex] = e;
+                spheres[selectedIndex].scale.set(e,e,e);
+                
+                //Positioning
+                x_pos = 0;
+                //Draw all spheres and add into array
+                for (var i = 0; i < MAX_PENDS; i++) 
+                {   
+                    //Calculate position and add into an array
+                    spheres[i].position.x = x_coord[i] + x_pos;
+                    spheres[i].position.y = y_coord[i];
+                    
+                    if(selectedIndex == i) {
+                        if (startOfPen[i] == true) {
+                            line[i].geometry.vertices[1].set(x_coord[i]-radiusScale[i]*Math.sin(theta0[i]),y_coord[i]+radiusScale[i]*Math.cos(theta0[i]),0);    
+                        }
+                        else {
+                            line[i].geometry.vertices[1].set(x_coord[i]-radiusScale[i]*Math.sin(theta[i]),y_coord[i]+radiusScale[i]*Math.cos(theta[i]),0);
+                        }
+                        line[i].geometry.verticesNeedUpdate = true;
+                    } 
+                    line[i].position.x = x_pos;
+                    
+                    x_pos += (radiusScale[i]+radiusScale[i+1]); 
+                }
+                
+                updateCradle();
+            });
+            pendulums.add(options, 'mass', 0.5, 5).name('Mass').onChange(function(e){
+                mass[selectedIndex] = e;
+            });
+            //Slider for starting angles
+            pendulums.add(options, 'angle', -Math.PI/2, Math.PI/2).name('Angle').onChange(function(e)
+            { 
+                initAnim = true;
+                runAnim = false;
+                isPlay = false;
+                
+                //Reset physics values
+                a = [0,0,0,0,0,0,0,0,0,0];
+                v = [0,0,0,0,0,0,0,0,0,0];
+                theta = [];
+            
+                //Set to initial pendulums
+                startOfPen = [];
+                
+                //Position the pendulums
+                x_pos = 0;
+                for (var i = 0; i < MAX_PENDS; i++) 
+                {   
+                    startOfPen.push(true);
+                        
+                    x_coord[i] = (L*Math.sin(theta0[i]));
+                    y_coord[i] = (-L*Math.cos(theta0[i])+STRING_END_Y);
+                        
+                    spheres[i].position.x = x_coord[i] + x_pos;
+                    spheres[i].position.y = y_coord[i];
+                    
+                    line[i].geometry.vertices[1].set(x_coord[i]-radiusScale[i]*Math.sin(theta0[i]),y_coord[i]+radiusScale[i]*Math.cos(theta0[i]),0);
+                    line[i].geometry.verticesNeedUpdate = true;
+                    line[i].position.x = x_pos;
+                    
+                    x_pos += (radiusScale[i]+radiusScale[i+1]);
+                }
+                
+                //Update the selected pendulums starting angle
+                theta0[selectedIndex] = e;
+                
+                //Determine new position
+                x_coord[selectedIndex] = (L*Math.sin(theta0[selectedIndex]));
+                y_coord[selectedIndex] = (-L*Math.cos(theta0[selectedIndex])+STRING_END_Y);
+                x_pos = 0;
+                for (var i = 1; i <= selectedIndex; i++) {
+                    x_pos += (radiusScale[i]+radiusScale[i-1])
+                }
+                
+                //Update the selected spheres position
+                spheres[selectedIndex].position.x = x_coord[selectedIndex] + x_pos;
+                spheres[selectedIndex].position.y = y_coord[selectedIndex];
+                
+                //Update position of the vertex "attached" to the sphere in the line
+                line[selectedIndex].geometry.vertices[1].set(x_coord[selectedIndex]-radiusScale[selectedIndex]*Math.sin(theta0[selectedIndex]), y_coord[selectedIndex]+radiusScale[selectedIndex]*Math.cos(theta0[selectedIndex]),0);
+                line[selectedIndex].geometry.verticesNeedUpdate = true;
+            });
+            //Add buttons for the reset functions in the menu
+            pendulums.add(options, 'resetCurrent').name('Reset selected');
+            pendulums.add(options, 'resetAll').name('Reset all');
+            //Keep the folder open when the page is loaded
+            pendulums.open();
+            
+            //Make space for text wider (do not crop away "simulation") in the menu
+            document.getElementsByClassName('property-name')[0].style.width = "200px";
+            
+            /*************************************************************/
+            /*************************************************************/
+            
+            
+            /************* Functions ***************/
+            function updateCradle() {
+                    cradleWidth = 0;
+                    for(var i = 0; i < numPends; i++) {
+                        cradleWidth += radiusScale[i];
+                    }
+            
+                    //Position and scale the cradle to the center relative to the pendulums
+                    cradleScaleX = cradleWidth/SCALE_X_FACTOR;
+
+                    //Position the camera and target point of controls to center relative to the pendulums
+                    camera.position.set((cradleWidth-radiusScale[0]),0,18);
+                    controls.target.set((cradleWidth-radiusScale[0]),0,0);
+                    controls.update(); 
+                    
+                    cradle.position.set(cradleWidth-radiusScale[0],1.5,0);
+                    cradle.scale.set(cradleScaleX,CRADLE_SCALE_Y*height,CRADLE_SCALE_Z*height/2);
+            };
+            
+            //Rendering scene
+            function render() {
+                renderer.render( scene, camera );
+                requestAnimationFrame( render );
+            };
+            
+            //Sum all elements in an array
+            function add(a,b) {
+                return a + b;
+            }
+            
+            //Creates selection, when a sphere is clicked, make it the selection 
+            //and update the sliders in pendulum options to the current selection
+            //Cant handle if cradle or cords are clicked
+            //Solution found at https://threejs.org/docs/#api/en/core/Raycaster
+            //and https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/find
+            function onClick(event) {
+                mouse.x = event.clientX / window.innerWidth * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+                raycaster.setFromCamera(mouse, camera);
+                var intersects = raycaster.intersectObjects(scene.children);
+                
+                if (intersects.length > 0) {
+                    //Checks a sphere has been selected and not any other type of object
+                    selectedIndex = spheres.findIndex(spheres => spheres === intersects[0].object);
+                    selected = spheres[selectedIndex];
+                    
+                    pendulums.__controllers[1].setValue(radiusScale[selectedIndex]);
+                    pendulums.__controllers[2].setValue(mass[selectedIndex]);
+                    pendulums.__controllers[3].setValue(theta0[selectedIndex]);
+                } else {
+                    console.log("selection not found")
+                }
+            }
+            
+            //Determines position of spheres when simulated
+			var animate = function() {
+                //Pause animation
+                if(!isPlay) {
+                    return;
+                }
+                requestAnimationFrame( animate );
+
+				//Calculate positions for spheres of the pendulums
+                x_pos = 0;
+                for(var i = 0; i<MAX_PENDS; i++)
+                {
+                    //Initial position
+                    if(startOfPen[i]){ 
+                        //Calculates initial acceleration velocity and the 
+                        //angle in the next timestep
+                        a[i]=(-g*Math.sin(theta0[i])/L);
+                        v[i]=(v0[i]+h*a[i]);
+                        theta[i]=(theta0[i] + h*v0[i]);
+                        startOfPen[i] = false;
+                    }
+                    //In movement
+                    else if (!startOfPen[i]) 
+                    {
+                        //Determines and updates new position for the pendulums
+                        x_coord[i] = L*Math.sin(theta[i]);
+                        y_coord[i] = -L*Math.cos(theta[i])+STRING_END_Y;
+                        spheres[i].position.x = x_coord[i] + x_pos;
+                        spheres[i].position.y = y_coord[i];
+                        
+                        //Applies a dragforce and determine the current acceleration and velocity
+                        var dragForce = CD*airDensity*Math.sign(v[i])*Math.pow(v[i],2)*Math.PI*Math.pow(radiusScale[i],2);
+                        a[i] = (-g*Math.sin(theta[i])-dragForce/mass[i])/L;
+                        v[i] = v[i]+h*a[i];
+                        theta[i] = theta[i] + h*v[i];      
+                        
+                        //Check collision
+                        var ax, by, dist, temp1, temp2;  
+                        //Sums all current accelerations
+                        var sum_a = a.reduce(add,0);
+                        
+                        //If pendulum is moving to the right check collision with the next pendulum to the right
+                        if (sum_a > 0) {
+                            //Determine distance between the pendulum and the one to the right of it
+                            for (var j = 0; j < (numPends-1); j++) {
+                                ax = Math.pow(spheres[j].position.x-spheres[j+1].position.x,2);
+                                by = Math.pow(spheres[j].position.y-spheres[j+1].position.y,2);
+                                dist = Math.sqrt(ax+by);
+                                
+                                //If distance is less than the combined radii of the two pendulums, 
+                                //there should be a collision
+                                if(dist < radiusScale[j]+radiusScale[j+1]) {
+                                    
+                                    //calculate new velocity from restitution and swap velocity and angle (old)
+                                    //temp1 = 2*mass[j]/(mass[j]+mass[j+1])*v[j] + (mass[j+1]-mass[j])/(mass[j]+mass[j+1])*v[j+1];
+                                    //temp2 = (mass[j]-mass[j+1])/(mass[j]+mass[j+1])*v[j]+2*mass[j+1]/(mass[j]+mass[j+1])*v[j+1];
+                                    
+                                    //Calculate the new velocities using coefficient of restitution
+                                    temp1 = (mass[j]*v[j] + mass[j+1]*v[j+1] + mass[j]*CR*(v[j] - v[j+1]))/(mass[j] + mass[j+1]);
+                                    temp2 = (mass[j]*v[j] + mass[j+1]*v[j+1] + mass[j+1]*CR*(v[j+1] - v[j]))/(mass[j] + mass[j+1]);
+                                    
+                                    //Swap velocities and angles between the two colliding pendulums
+                                    v[j+1] = temp1;
+                                    v[j] = temp2;
+                                    temp3 = theta[j+1];
+                                    theta[j+1] = theta[j];
+                                    theta[j] = temp3;
+                                }
+                            }
+                            
+                        } 
+                        //If pendulum is moving to the left check collision with the next pendulum to the left
+                        else {
+                            //Determine distance between the pendulum and the one to the left of it
+                            for (var j = numPends-1; j > 0; j--) {
+                                ax = Math.pow(spheres[j].position.x-spheres[j-1].position.x,2);
+                                by = Math.pow(spheres[j].position.y-spheres[j-1].position.y,2);
+                                dist = Math.sqrt(ax+by);
+                                
+                                //If distance is less than the combined radii of the two pendulums, 
+                                //there should be a collision
+                                if(dist < radiusScale[j]+radiusScale[j-1]) {
+
+                                    //calculate new velocity from restitution and swap velocity and angle (old)
+                                    //temp1 = 2*mass[j]/(mass[j]+mass[j-1])*v[j] + (mass[j-1]-mass[j])/(mass[j]+mass[j-1])*v[j-1];
+                                    //temp2 = (mass[j]-mass[j-1])/(mass[j]+mass[j-1])*v[j]+2*mass[j-1]/(mass[j]+mass[j-1])*v[j-1];
+                                    
+                                    //Calculate the new velocities using coefficient of restitution
+                                    temp1 = (mass[j]*v[j] + mass[j-1]*v[j-1] + mass[j]*CR*(v[j] - v[j-1]))/(mass[j] + mass[j-1]);
+                                    temp2 = (mass[j]*v[j] + mass[j-1]*v[j-1] + mass[j-1]*CR*(v[j-1] - v[j]))/(mass[j] + mass[j-1]);
+                                    
+                                    //Swap velocities and angles between the two colliding pendulums
+                                    v[j-1] = temp1;
+                                    v[j] = temp2;
+                                    temp3 = theta[j-1];
+                                    theta[j-1] = theta[j];
+                                    theta[j] = temp3;
+                                }
+                            }
+                        }
+                        //Update pendulums positions
+                        x_coord[i] = L*Math.sin(theta[i]);
+                        y_coord[i] = -L*Math.cos(theta[i])+STRING_END_Y;
+                        spheres[i].position.x = x_coord[i] + x_pos;
+                        spheres[i].position.y = y_coord[i];
+                        line[i].geometry.vertices[1].x = x_coord[i]-radiusScale[i]*Math.sin(theta[i]);
+                        line[i].geometry.vertices[1].y = y_coord[i]+radiusScale[i]*Math.cos(theta[i]);
+                        line[i].geometry.verticesNeedUpdate = true;
+                    }
+                    //Position the pendulums beside each other
+                    x_pos += (radiusScale[i]+radiusScale[i+1])
+                }
+			};
+		</script>
+	</body>
+</html>
